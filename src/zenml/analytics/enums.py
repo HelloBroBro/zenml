@@ -18,6 +18,9 @@ from enum import Enum
 class AnalyticsEvent(str, Enum):
     """Enum of events to track in segment."""
 
+    # Login
+    DEVICE_VERIFIED = "Device verified"
+
     # Pipelines
     RUN_PIPELINE = "Pipeline run"
     RUN_PIPELINE_ENDED = "Pipeline run ended"
@@ -36,6 +39,10 @@ class AnalyticsEvent(str, Enum):
     # Stack
     REGISTERED_STACK = "Stack registered"
     UPDATED_STACK = "Stack updated"
+
+    # Trigger
+    CREATED_TRIGGER = "Trigger created"
+    UPDATED_TRIGGER = "Trigger updated"
 
     # Model Control Plane
     MODEL_DEPLOYED = "Model deployed"
