@@ -39,7 +39,7 @@ from typing import (
 )
 from uuid import UUID
 
-from pydantic import SecretStr, root_validator, validator
+from pydantic import Field, SecretStr, root_validator, validator
 from sqlalchemy import asc, desc, func
 from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.exc import (
@@ -384,9 +384,11 @@ class SqlZenStoreConfiguration(StoreConfiguration):
 
     backup_strategy: DatabaseBackupStrategy = DatabaseBackupStrategy.IN_MEMORY
     # database backup directory
-    backup_directory: str = os.path.join(
-        GlobalConfiguration().config_directory,
-        SQL_STORE_BACKUP_DIRECTORY_NAME,
+    backup_directory: str = Field(
+        default_factory=lambda: os.path.join(
+            GlobalConfiguration().config_directory,
+            SQL_STORE_BACKUP_DIRECTORY_NAME,
+        )
     )
     backup_database: Optional[str] = None
 
@@ -688,9 +690,9 @@ class SqlZenStoreConfiguration(StoreConfiguration):
                     )
                 sqlalchemy_ssl_args[key.lstrip("ssl_")] = ssl_setting
             if len(sqlalchemy_ssl_args) > 0:
-                sqlalchemy_ssl_args[
-                    "check_hostname"
-                ] = self.ssl_verify_server_cert
+                sqlalchemy_ssl_args["check_hostname"] = (
+                    self.ssl_verify_server_cert
+                )
                 sqlalchemy_connect_args["ssl"] = sqlalchemy_ssl_args
         else:
             raise NotImplementedError(
@@ -1409,7 +1411,6 @@ class SqlZenStore(BaseZenStore):
         # Fetch the deployment ID from the database and use it to replace
         # the one fetched from the global configuration
         model.id = self.get_deployment_id()
-
         return model
 
     def get_deployment_id(self) -> UUID:
@@ -2506,14 +2507,14 @@ class SqlZenStore(BaseZenStore):
         """
         with Session(self.engine) as session:
             query = select(StackComponentSchema)
-            paged_components: Page[
-                ComponentResponse
-            ] = self.filter_and_paginate(
-                session=session,
-                query=query,
-                table=StackComponentSchema,
-                filter_model=component_filter_model,
-                hydrate=hydrate,
+            paged_components: Page[ComponentResponse] = (
+                self.filter_and_paginate(
+                    session=session,
+                    query=query,
+                    table=StackComponentSchema,
+                    filter_model=component_filter_model,
+                    hydrate=hydrate,
+                )
             )
             return paged_components
 
@@ -5146,28 +5147,29 @@ class SqlZenStore(BaseZenStore):
                 already exists.
         """
         with Session(self.engine) as session:
+            # Check if a service account with the given name already
+            # exists
+            err_msg = (
+                f"Unable to create service account with name "
+                f"'{service_account.name}': Found existing service "
+                "account with this name."
+            )
+            try:
+                self._get_account_schema(
+                    service_account.name, session=session, service_account=True
+                )
+                raise EntityExistsError(err_msg)
+            except KeyError:
+                pass
+
             # Create the service account
             new_account = UserSchema.from_service_account_request(
                 service_account
             )
             session.add(new_account)
+            # on commit an IntegrityError may arise we let it bubble up
+            session.commit()
 
-            # Check if a service account with the given name already
-            # exists
-            service_accounts = session.execute(
-                select(UserSchema).where(
-                    UserSchema.name == service_account.name,
-                    UserSchema.is_service_account.is_(True),  # type: ignore[attr-defined]
-                )
-            ).fetchall()
-            if len(service_accounts) == 1:
-                session.commit()
-            else:
-                raise EntityExistsError(
-                    f"Unable to create service account with name "
-                    f"'{service_account.name}': Found existing service "
-                    "account with this name."
-                )
             return new_account.to_service_account_model(include_metadata=True)
 
     def get_service_account(
@@ -5215,17 +5217,17 @@ class SqlZenStore(BaseZenStore):
         """
         with Session(self.engine) as session:
             query = select(UserSchema)
-            paged_service_accounts: Page[
-                ServiceAccountResponse
-            ] = self.filter_and_paginate(
-                session=session,
-                query=query,
-                table=UserSchema,
-                filter_model=filter_model,
-                custom_schema_to_model_conversion=lambda user: user.to_service_account_model(
-                    include_metadata=hydrate
-                ),
-                hydrate=hydrate,
+            paged_service_accounts: Page[ServiceAccountResponse] = (
+                self.filter_and_paginate(
+                    session=session,
+                    query=query,
+                    table=UserSchema,
+                    filter_model=filter_model,
+                    custom_schema_to_model_conversion=lambda user: user.to_service_account_model(
+                        include_metadata=hydrate
+                    ),
+                    hydrate=hydrate,
+                )
             )
             return paged_service_accounts
 
@@ -5474,15 +5476,15 @@ class SqlZenStore(BaseZenStore):
 
         with Session(self.engine) as session:
             query = select(ServiceConnectorSchema)
-            paged_connectors: Page[
-                ServiceConnectorResponse
-            ] = self.filter_and_paginate(
-                session=session,
-                query=query,
-                table=ServiceConnectorSchema,
-                filter_model=filter_model,
-                custom_fetch=fetch_connectors,
-                hydrate=hydrate,
+            paged_connectors: Page[ServiceConnectorResponse] = (
+                self.filter_and_paginate(
+                    session=session,
+                    query=query,
+                    table=ServiceConnectorSchema,
+                    filter_model=filter_model,
+                    custom_fetch=fetch_connectors,
+                    hydrate=hydrate,
+                )
             )
 
             self._populate_connector_type(*paged_connectors.items)
@@ -7357,24 +7359,27 @@ class SqlZenStore(BaseZenStore):
                 already exists.
         """
         with Session(self.engine) as session:
+            # Check if a user account with the given name already exists
+            err_msg = (
+                f"Unable to create user with name '{user.name}': "
+                f"Found an existing user account with this name."
+            )
+            try:
+                self._get_account_schema(
+                    user.name,
+                    session=session,
+                    # Filter out service accounts
+                    service_account=False,
+                )
+                raise EntityExistsError(err_msg)
+            except KeyError:
+                pass
+
             # Create the user
             new_user = UserSchema.from_user_request(user)
             session.add(new_user)
-
-            # Check if a user account with the given name already exists
-            users = session.execute(
-                select(UserSchema).where(
-                    UserSchema.name == user.name,
-                    UserSchema.is_service_account.is_(False),  # type: ignore[attr-defined]
-                )
-            ).fetchall()
-            if len(users) == 1:
-                session.commit()
-            else:
-                raise EntityExistsError(
-                    f"Unable to create user with name '{user.name}': "
-                    f"Found an existing user account with this name."
-                )
+            # on commit an IntegrityError may arise we let it bubble up
+            session.commit()
             return new_user.to_model(include_metadata=True)
 
     def get_user(
